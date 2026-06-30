@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python features.py)"
+      "Bash(python features.py)",
+      "Bash(pip list:*)",
+      "Bash(python -c \"import xgboost; print\\('xgboost', xgboost.__version__\\)\")",
+      "Bash(python -c \"import sklearn; print\\('sklearn', sklearn.__version__\\)\")",
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)"
     ]
   }
 }

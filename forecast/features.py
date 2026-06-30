@@ -27,6 +27,11 @@ FORECAST_END = pd.Timestamp('2025-07-31')
 LAG_DAYS = [7, 14, 21, 28, 364, 365, 728]
 ROLLING_WINDOWS = [7, 14, 28, 90]
 
+# Map short lags to rolling-mean columns used as fill proxies for forecast rows
+SHORT_LAGS = [7, 14, 21, 28]
+LAG_TO_ROLLING = {7: 'rolling_7_mean', 14: 'rolling_14_mean',
+                  21: 'rolling_28_mean', 28: 'rolling_28_mean'}
+
 PROVINCE_TO_CLUSTER = {
     'Western Cape': 'coastal',
     'KwaZulu-Natal': 'coastal',
@@ -176,6 +181,19 @@ def add_rolling_features(df):
     return df
 
 
+# ── 5b. FILL SHORT-LAG NaNs ON FORECAST ROWS ────────────────────────────
+
+def fill_forecast_lags(df):
+    """Fill short-lag NaNs on forecast rows with rolling mean proxies."""
+    mask = df['is_forecast']
+    for lag, roll_col in LAG_TO_ROLLING.items():
+        col = f'lag_{lag}'
+        df.loc[mask & df[col].isna(), col] = df.loc[mask & df[col].isna(), roll_col]
+    n_still_nan = df.loc[mask, [f'lag_{l}' for l in SHORT_LAGS]].isna().sum().sum()
+    print(f"[5b] Forecast short-lag NaNs filled (remaining NaN: {n_still_nan})")
+    return df
+
+
 # ── 6. SAME-WEEK-LAST-YEAR AVERAGE ────────────────────────────────────────
 
 def add_same_week_last_year(df):
@@ -252,6 +270,17 @@ def add_province_encoding(df):
     return df
 
 
+# ── 8b. RESTAURANT IDENTITY ENCODING ────────────────────────────────────
+
+def add_restaurant_encoding(df):
+    """One-hot encode restaurant_id to let the model learn per-restaurant patterns."""
+    dummies = pd.get_dummies(df['restaurant_id'], prefix='rest', dtype=int)
+    df = pd.concat([df, dummies], axis=1)
+
+    print(f"[8b] Restaurant one-hot added ({df.shape[1]} cols)")
+    return df
+
+
 # ── 9. RESTAURANT-LEVEL SCALE FEATURE ─────────────────────────────────────
 
 def add_restaurant_scale(df):
@@ -275,9 +304,11 @@ def main():
     df = add_holiday_features(df)
     df = add_lag_features(df)
     df = add_rolling_features(df)
+    df = fill_forecast_lags(df)
     df = add_same_week_last_year(df)
     df = add_transaction_and_voucher_features(df)
     df = add_province_encoding(df)
+    df = add_restaurant_encoding(df)
     df = add_restaurant_scale(df)
 
     # Final sort and save

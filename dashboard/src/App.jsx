@@ -45,20 +45,40 @@ function aggregateData(data, aggLevel) {
     }
 
     if (!buckets[key]) {
-      buckets[key] = { totalSales: 0, transactionCount: 0, participantCount: 0 };
+      buckets[key] = {
+        totalSales: 0,
+        transactionCount: 0,
+        participantCount: 0,
+        forecastSales: 0,
+        hasActual: false,
+        hasForecast: false,
+      };
     }
-    buckets[key].totalSales += d.totalSales;
-    buckets[key].transactionCount += d.transactionCount;
-    buckets[key].participantCount += d.participantCount;
+    const b = buckets[key];
+    if (d.totalSales != null) {
+      b.totalSales += d.totalSales;
+      b.hasActual = true;
+    }
+    b.transactionCount += d.transactionCount || 0;
+    b.participantCount += d.participantCount || 0;
+    if (d.forecastSales != null) {
+      b.forecastSales += d.forecastSales;
+      b.hasForecast = true;
+    }
   });
 
   return Object.entries(buckets)
-    .map(([date, d]) => ({
+    .map(([date, b]) => ({
       date,
-      totalSales: Math.round(d.totalSales * 100) / 100,
-      transactionCount: d.transactionCount,
-      avgSale: Math.round((d.totalSales / d.transactionCount) * 100) / 100,
-      participantCount: d.participantCount,
+      totalSales: b.hasActual ? Math.round(b.totalSales * 100) / 100 : undefined,
+      transactionCount: b.transactionCount,
+      avgSale: b.transactionCount
+        ? Math.round((b.totalSales / b.transactionCount) * 100) / 100
+        : undefined,
+      participantCount: b.participantCount,
+      forecastSales: b.hasForecast
+        ? Math.round(b.forecastSales * 100) / 100
+        : undefined,
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -74,7 +94,9 @@ function CustomTooltip({ active, payload, label }) {
             {p.name}
           </span>
           <span className="tooltip-value">
-            {p.name.includes("Sales") || p.name.includes("Avg")
+            {p.name.includes("Sales") ||
+            p.name.includes("Avg") ||
+            p.name.includes("Forecast")
               ? formatCurrency(p.value)
               : formatNumber(p.value)}
           </span>
@@ -88,10 +110,11 @@ function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedRestaurant, setSelectedRestaurant] = useState("all");
-  const [startDate, setStartDate] = useState("2023-01-01");
-  const [endDate, setEndDate] = useState("2025-06-30");
-  const [aggregation, setAggregation] = useState("monthly");
-  const [quickRange, setQuickRange] = useState(null);
+  const [startDate, setStartDate] = useState("2025-01-01");
+  const [endDate, setEndDate] = useState("2025-07-31");
+  const [aggregation, setAggregation] = useState("daily");
+  const [quickRange, setQuickRange] = useState("Jul '25");
+  const [showForecast, setShowForecast] = useState(true);
 
   useEffect(() => {
     fetch("/sales_data.json")
@@ -111,49 +134,136 @@ function App() {
   const filteredData = useMemo(() => {
     if (!data) return [];
 
-    let combined = [];
+    const dateMap = {};
+
+    const addHistory = (days) => {
+      days.forEach((d) => {
+        if (d.date >= startDate && d.date <= endDate) {
+          if (!dateMap[d.date]) dateMap[d.date] = { date: d.date };
+          const row = dateMap[d.date];
+          row.totalSales = (row.totalSales || 0) + d.totalSales;
+          row.transactionCount = (row.transactionCount || 0) + d.transactionCount;
+          row.participantCount = (row.participantCount || 0) + d.participantCount;
+        }
+      });
+    };
+
+    const addForecast = (days) => {
+      if (!showForecast) return;
+      days.forEach((d) => {
+        if (d.date >= startDate && d.date <= endDate) {
+          if (!dateMap[d.date]) dateMap[d.date] = { date: d.date };
+          dateMap[d.date].forecastSales =
+            (dateMap[d.date].forecastSales || 0) + d.predictedRevenue;
+        }
+      });
+    };
 
     if (selectedRestaurant === "all") {
-      // Merge all restaurants into combined daily totals
-      const dateMap = {};
-      Object.values(data.dailySales).forEach((days) => {
-        days.forEach((d) => {
-          if (d.date >= startDate && d.date <= endDate) {
-            if (!dateMap[d.date]) {
-              dateMap[d.date] = { totalSales: 0, transactionCount: 0, participantCount: 0 };
-            }
-            dateMap[d.date].totalSales += d.totalSales;
-            dateMap[d.date].transactionCount += d.transactionCount;
-            dateMap[d.date].participantCount += d.participantCount;
-          }
-        });
-      });
-      combined = Object.entries(dateMap)
-        .map(([date, d]) => ({
-          date,
-          totalSales: d.totalSales,
-          transactionCount: d.transactionCount,
-          avgSale: Math.round((d.totalSales / d.transactionCount) * 100) / 100,
-          participantCount: d.participantCount,
-        }))
-        .sort((a, b) => a.date.localeCompare(b.date));
+      Object.values(data.dailySales).forEach(addHistory);
+      Object.values(data.forecast || {}).forEach(addForecast);
     } else {
-      const days = data.dailySales[selectedRestaurant] || [];
-      combined = days.filter((d) => d.date >= startDate && d.date <= endDate);
+      addHistory(data.dailySales[selectedRestaurant] || []);
+      addForecast(data.forecast?.[selectedRestaurant] || []);
     }
 
-    return aggregateData(combined, aggregation);
-  }, [data, selectedRestaurant, startDate, endDate, aggregation]);
+    let combined = Object.values(dateMap)
+      .map((d) => ({
+        ...d,
+        avgSale: d.transactionCount
+          ? Math.round((d.totalSales / d.transactionCount) * 100) / 100
+          : undefined,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
 
+    const result = aggregateData(combined, aggregation);
+
+    // Bridge the forecast line to the last actual point so it reads as
+    // one continuous flow rather than a floating segment.
+    if (showForecast) {
+      let lastActual = -1;
+      for (let i = 0; i < result.length; i++) {
+        if (result[i].totalSales != null) lastActual = i;
+      }
+      if (
+        lastActual >= 0 &&
+        lastActual < result.length - 1 &&
+        result[lastActual].forecastSales == null
+      ) {
+        result[lastActual] = {
+          ...result[lastActual],
+          forecastSales: result[lastActual].totalSales,
+        };
+      }
+    }
+
+    return result;
+  }, [data, selectedRestaurant, startDate, endDate, aggregation, showForecast]);
+
+  // Manager-facing KPIs, computed from the raw (unaggregated) series so they
+  // are independent of the chart's date-range / aggregation controls.
   const kpis = useMemo(() => {
-    if (!filteredData.length) return null;
-    const totalSales = filteredData.reduce((s, d) => s + d.totalSales, 0);
-    const totalTx = filteredData.reduce((s, d) => s + d.transactionCount, 0);
-    const totalParticipants = filteredData.reduce((s, d) => s + d.participantCount, 0);
-    const avgSale = totalTx > 0 ? totalSales / totalTx : 0;
-    const days = filteredData.length;
-    return { totalSales, totalTx, avgSale, totalParticipants, days };
-  }, [filteredData]);
+    if (!data) return null;
+
+    let forecastSeries = [];
+    let historySeries = [];
+
+    if (selectedRestaurant === "all") {
+      const fm = {};
+      Object.values(data.forecast || {}).forEach((arr) =>
+        arr.forEach((d) => {
+          fm[d.date] = (fm[d.date] || 0) + d.predictedRevenue;
+        })
+      );
+      forecastSeries = Object.entries(fm)
+        .map(([date, v]) => ({ date, v }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      const hm = {};
+      Object.values(data.dailySales).forEach((arr) =>
+        arr.forEach((d) => {
+          hm[d.date] = (hm[d.date] || 0) + d.totalSales;
+        })
+      );
+      historySeries = Object.entries(hm)
+        .map(([date, v]) => ({ date, v }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    } else {
+      forecastSeries = (data.forecast?.[selectedRestaurant] || []).map((d) => ({
+        date: d.date,
+        v: d.predictedRevenue,
+      }));
+      historySeries = (data.dailySales[selectedRestaurant] || []).map((d) => ({
+        date: d.date,
+        v: d.totalSales,
+      }));
+    }
+
+    if (!forecastSeries.length) return null;
+
+    const vals = forecastSeries.map((d) => d.v);
+    const monthTotal = vals.reduce((s, v) => s + v, 0);
+    const sorted = [...vals].sort((a, b) => a - b);
+    const typicalDay = sorted[Math.floor(sorted.length / 2)];
+
+    const avg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
+    const weekend = [];
+    const weekday = [];
+    forecastSeries.forEach((d) => {
+      const g = new Date(d.date).getDay(); // 0 Sun .. 6 Sat
+      (g === 0 || g === 6 ? weekend : weekday).push(d.v);
+    });
+
+    const runRate = avg(historySeries.slice(-14).map((d) => d.v));
+
+    return {
+      monthTotal,
+      typicalDay,
+      weekendAvg: avg(weekend),
+      weekdayAvg: avg(weekday),
+      runRate,
+    };
+  }, [data, selectedRestaurant]);
 
   if (loading) {
     return (
@@ -232,14 +342,26 @@ function App() {
         </div>
 
         <div className="control-group">
+          <label>Forecast</label>
+          <div className="agg-toggle">
+            <button
+              className={showForecast ? "active" : ""}
+              onClick={() => setShowForecast((s) => !s)}
+            >
+              {showForecast ? "July forecast: ON" : "July forecast: OFF"}
+            </button>
+          </div>
+        </div>
+
+        <div className="control-group">
           <label>Quick Range</label>
           <div className="quick-ranges">
             {[
+              { label: "Jul '25", start: "2025-01-01", end: "2025-07-31" },
               { label: "2023", start: "2023-01-01", end: "2023-12-31" },
               { label: "2024", start: "2024-01-01", end: "2024-12-31" },
-              { label: "2025", start: "2025-01-01", end: "2025-06-30" },
-              { label: "Last 6M", start: "2025-01-01", end: "2025-06-30" },
-              { label: "All", start: "2023-01-01", end: "2025-06-30" },
+              { label: "2025", start: "2025-01-01", end: "2025-07-31" },
+              { label: "All", start: "2023-01-01", end: "2025-07-31" },
             ].map((r) => (
               <button
                 key={r.label}
@@ -253,32 +375,30 @@ function App() {
         </div>
       </div>
 
-      {/* KPIs */}
+      {/* KPIs — July 2025 forecast, manager-facing */}
       {kpis && (
         <div className="kpi-grid">
           <div className="kpi-card">
-            <div className="kpi-label">Total Revenue</div>
-            <div className="kpi-value">{formatCurrency(kpis.totalSales)}</div>
-            <div className="kpi-sub">{kpis.days} {aggregation} periods</div>
+            <div className="kpi-label">Forecast July Total</div>
+            <div className="kpi-value">{formatCurrency(kpis.monthTotal)}</div>
+            <div className="kpi-sub">projected revenue, all 31 days</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-label">Transactions</div>
-            <div className="kpi-value">{formatNumber(kpis.totalTx)}</div>
+            <div className="kpi-label">Typical Forecast Day</div>
+            <div className="kpi-value">{formatCurrency(kpis.typicalDay)}</div>
+            <div className="kpi-sub">median day in July</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Weekend vs Weekday</div>
+            <div className="kpi-value">{formatCurrency(kpis.weekendAvg)}</div>
             <div className="kpi-sub">
-              Avg {formatNumber(Math.round(kpis.totalTx / kpis.days))} / {aggregation === "daily" ? "day" : aggregation === "weekly" ? "week" : "month"}
+              weekend avg · weekday {formatCurrency(kpis.weekdayAvg)}
             </div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-label">Avg Sale Value</div>
-            <div className="kpi-value">{formatCurrency(kpis.avgSale)}</div>
-            <div className="kpi-sub">per transaction</div>
-          </div>
-          <div className="kpi-card">
-            <div className="kpi-label">Total Participants</div>
-            <div className="kpi-value">{formatNumber(kpis.totalParticipants)}</div>
-            <div className="kpi-sub">
-              Avg {(kpis.totalParticipants / kpis.totalTx).toFixed(1)} per transaction
-            </div>
+            <div className="kpi-label">Latest Run-Rate</div>
+            <div className="kpi-value">{formatCurrency(kpis.runRate)}</div>
+            <div className="kpi-sub">avg of last 14 trading days</div>
           </div>
         </div>
       )}
@@ -287,7 +407,9 @@ function App() {
       <div className="chart-section">
         <h3>
           Revenue Over Time
-          <span className="chart-subtitle">({aggregation})</span>
+          <span className="chart-subtitle">
+            ({aggregation}) — actuals to 30 Jun, forecast for July
+          </span>
         </h3>
         <ResponsiveContainer width="100%" height={340}>
           <AreaChart data={filteredData}>
@@ -305,16 +427,31 @@ function App() {
               width={65}
             />
             <Tooltip content={<CustomTooltip />} />
+            <Legend />
             <Area
               type="monotone"
               dataKey="totalSales"
-              name="Total Sales"
+              name="Actual Sales"
               stroke="var(--chart-1)"
               fill="url(#salesGradient)"
               strokeWidth={2}
               dot={false}
               activeDot={{ r: 4, fill: "var(--chart-1)" }}
             />
+            {showForecast && (
+              <Area
+                type="monotone"
+                dataKey="forecastSales"
+                name="July Forecast"
+                stroke="var(--chart-3, #e67e22)"
+                fill="none"
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                dot={false}
+                activeDot={{ r: 4, fill: "var(--chart-3, #e67e22)" }}
+                connectNulls
+              />
+            )}
           </AreaChart>
         </ResponsiveContainer>
       </div>

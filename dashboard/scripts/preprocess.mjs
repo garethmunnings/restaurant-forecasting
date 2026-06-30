@@ -19,6 +19,14 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "..", "..", "data");
+const FORECAST_CSV = join(
+  __dirname,
+  "..",
+  "..",
+  "forecast",
+  "output",
+  "july_forecast.csv"
+);
 const OUT_DIR = join(__dirname, "..", "public");
 
 // Read restaurants
@@ -102,9 +110,38 @@ for (const [restaurantId, dates] of Object.entries(dailySales)) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+// Read July 2025 forecast (forecast/output/july_forecast.csv)
+// restaurant_id,date,predicted_revenue
+const forecast = {}; // { restaurantId: [{ date, predictedRevenue }] }
+try {
+  const forecastCsv = readFileSync(FORECAST_CSV, "utf-8");
+  const forecastLines = forecastCsv.trim().split(/\r?\n/);
+  forecastLines.slice(1).forEach((line) => {
+    const [restaurantId, date, predicted] = line.split(",");
+    if (!forecast[restaurantId]) forecast[restaurantId] = [];
+    forecast[restaurantId].push({
+      date,
+      predictedRevenue: Math.round(parseFloat(predicted) * 100) / 100,
+    });
+  });
+  for (const arr of Object.values(forecast)) {
+    arr.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  const forecastRows = Object.values(forecast).reduce(
+    (s, arr) => s + arr.length,
+    0
+  );
+  console.log(
+    `Loaded forecast: ${forecastRows} rows across ${Object.keys(forecast).length} restaurants`
+  );
+} catch (err) {
+  console.warn(`Could not load forecast CSV (${FORECAST_CSV}): ${err.message}`);
+}
+
 const output = {
   restaurants,
   dailySales: dailySalesArrays,
+  forecast,
 };
 
 mkdirSync(OUT_DIR, { recursive: true });
