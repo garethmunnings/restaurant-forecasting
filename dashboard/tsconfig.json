@@ -5,6 +5,8 @@
     "lib": ["ES2023", "DOM"],
     "types": ["vite/client"],
     "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "allowJs": true,
 
     /* Bundler mode */
     "moduleResolution": "bundler",
