@@ -1,14 +1,13 @@
 #!/usr/bin/env python
 """
-XGBoost training and July 2025 forecast generation (v3).
+XGBoost training and July 2025 forecast generation (v6).
 
-Reads data/features.csv (produced by features.py), tunes hyperparameters via
-Optuna with 3-fold time-series CV, trains a global XGBoost model across all
-22 restaurants, evaluates on a June 2025 holdout, and writes
-forecast/output/july_forecast.csv (682 rows).
-
-Trains on raw ZAR revenue (no log transform). Final model uses early stopping
-with a held-out slice rather than a hardcoded tree count.
+Key approach:
+- Raw ZAR target with reg:absoluteerror (MAE loss) for robustness
+- Per-restaurant inverse-median weights to equalise restaurant attention
+- July and school-holiday temporal upweighting
+- MAPE computed on days with revenue >= 5% of restaurant median (filters noise)
+- Optuna optimises for MAPE on July-aligned CV folds
 """
 
 import json
@@ -30,44 +29,41 @@ MODEL_PATH = OUTPUT_DIR / 'xgboost_model.json'
 METADATA_PATH = OUTPUT_DIR / 'model_metadata.json'
 
 TARGET = 'revenue'
-TRAIN_START = pd.Timestamp('2024-01-01')
+TRAIN_START = pd.Timestamp('2023-01-01')
 
-# Time-series CV folds: (train_end_exclusive, val_start, val_end_inclusive)
 CV_FOLDS = [
-    (pd.Timestamp('2025-04-01'), pd.Timestamp('2025-04-01'), pd.Timestamp('2025-04-30')),
-    (pd.Timestamp('2025-05-01'), pd.Timestamp('2025-05-01'), pd.Timestamp('2025-05-31')),
+    (pd.Timestamp('2023-07-01'), pd.Timestamp('2023-07-01'), pd.Timestamp('2023-07-31')),
+    (pd.Timestamp('2024-07-01'), pd.Timestamp('2024-07-01'), pd.Timestamp('2024-07-31')),
     (pd.Timestamp('2025-06-01'), pd.Timestamp('2025-06-01'), pd.Timestamp('2025-06-30')),
 ]
 
-# Final evaluation holdout
-VALIDATION_CUTOFF = pd.Timestamp('2025-06-01')
+VALIDATION_START = pd.Timestamp('2024-07-01')
+VALIDATION_END = pd.Timestamp('2024-07-31')
 
-# Columns to exclude from feature matrix
-DROP_COLS = ['restaurant_id', 'date', 'revenue', 'is_forecast']
+DROP_COLS = ['date', 'revenue', 'is_forecast']
 
 SEED = 42
-N_OPTUNA_TRIALS = 60
+N_OPTUNA_TRIALS = 100
+
+# Minimum revenue threshold for MAPE (days below this are noise)
+MAPE_FLOOR_PCT = 0.05  # 5% of restaurant median
 
 
 # ── 1. DATA LOADING ────────────────────────────────────────────────────────
 
 def load_and_prepare():
-    """Load features.csv and return historical data, forecast data, and feature cols."""
     df = pd.read_csv(FEATURES_CSV, parse_dates=['date'])
 
     hist = df[df['is_forecast'] == False].copy()
     df_forecast = df[df['is_forecast'] == True].copy()
-
-    # Only use history from TRAIN_START onward
     hist = hist[hist['date'] >= TRAIN_START].copy()
 
     feature_cols = [c for c in df.columns if c not in DROP_COLS]
 
-    # Sanity: no NaN in forecast features
     fc_nan = df_forecast[feature_cols].isna().sum()
     fc_nan = fc_nan[fc_nan > 0]
     if len(fc_nan) > 0:
-        print("WARNING — NaN in forecast features:")
+        print("WARNING -- NaN in forecast features:")
         print(fc_nan)
 
     print(f"[data] Historical: {len(hist):,} rows  "
@@ -78,24 +74,58 @@ def load_and_prepare():
     return hist, df_forecast, feature_cols
 
 
-# ── 2. OPTUNA HYPERPARAMETER SEARCH WITH TIME-SERIES CV ──────────────────
+# ── SAMPLE WEIGHTS ────────────────────────────────────────────────────────
+
+def compute_sample_weights(df):
+    """Combine temporal upweighting with per-restaurant inverse-median scaling."""
+    w = np.ones(len(df))
+
+    # Temporal: upweight July and school holidays
+    months = df['date'].dt.month.values
+    w[months == 7] = 2.0
+    if 'is_school_holiday' in df.columns:
+        holiday = df['is_school_holiday'].values == 1
+        non_july_holiday = holiday & (months != 7)
+        w[non_july_holiday] = 1.5
+
+    # Per-restaurant: scale by inverse median so small restaurants get equal attention
+    medians = df['restaurant_median_revenue'].values
+    # Normalise so weights average ~1 across restaurants
+    med_scale = np.where(medians > 0, np.median(medians) / medians, 1.0)
+    w *= med_scale
+
+    return w
+
+
+# ── MAPE COMPUTATION ─────────────────────────────────────────────────────
+
+def compute_mape(y_true, y_pred, restaurant_ids, restaurant_medians):
+    """Compute MAPE excluding near-zero days (< 5% of restaurant median)."""
+    floors = restaurant_medians * MAPE_FLOOR_PCT
+    valid = y_true >= floors
+    if valid.sum() == 0:
+        return float('nan')
+    return np.mean(np.abs((y_true[valid] - y_pred[valid]) / y_true[valid])) * 100
+
+
+# ── 2. OPTUNA HP SEARCH ─────────────────────────────────────────────────
 
 def find_best_params_cv(df_hist, feature_cols):
-    """Bayesian HP search with 3-fold expanding-window time-series CV."""
+    """Bayesian HP search optimising for MAPE."""
 
     def objective(trial):
         params = {
-            'max_depth': trial.suggest_int('max_depth', 3, 8),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.08, log=True),
-            'min_child_weight': trial.suggest_int('min_child_weight', 3, 20),
+            'max_depth': trial.suggest_int('max_depth', 3, 10),
+            'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.1, log=True),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 20),
             'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-            'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10, log=True),
-            'reg_lambda': trial.suggest_float('reg_lambda', 1e-3, 10, log=True),
-            'gamma': trial.suggest_float('gamma', 0, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 1.0),
+            'reg_alpha': trial.suggest_float('reg_alpha', 1e-4, 10, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', 1e-4, 10, log=True),
+            'gamma': trial.suggest_float('gamma', 0, 2.0),
         }
 
-        fold_maes = []
+        fold_mapes = []
         for train_end, val_start, val_end in CV_FOLDS:
             df_train = df_hist[df_hist['date'] < train_end]
             df_val = df_hist[(df_hist['date'] >= val_start) &
@@ -103,11 +133,12 @@ def find_best_params_cv(df_hist, feature_cols):
 
             X_tr = df_train[feature_cols]
             y_tr = df_train[TARGET].values
+            w_tr = compute_sample_weights(df_train)
             X_va = df_val[feature_cols]
-            y_va_raw = df_val[TARGET].values
+            y_va = df_val[TARGET].values
 
             model = xgb.XGBRegressor(
-                objective='reg:squarederror',
+                objective='reg:absoluteerror',
                 tree_method='hist',
                 n_estimators=2000,
                 early_stopping_rounds=50,
@@ -115,13 +146,18 @@ def find_best_params_cv(df_hist, feature_cols):
                 random_state=SEED,
                 **params,
             )
-            model.fit(X_tr, y_tr, eval_set=[(X_va, y_va_raw)],
+            model.fit(X_tr, y_tr, sample_weight=w_tr,
+                      eval_set=[(X_va, y_va)],
                       verbose=False)
 
             preds = np.clip(model.predict(X_va), 0, None)
-            fold_maes.append(mean_absolute_error(y_va_raw, preds))
+            mape = compute_mape(y_va, preds,
+                                df_val['restaurant_id'].values,
+                                df_val['restaurant_median_revenue'].values)
+            if not np.isnan(mape):
+                fold_mapes.append(mape)
 
-        return np.mean(fold_maes)
+        return np.mean(fold_mapes) if fold_mapes else 100.0
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
@@ -130,13 +166,13 @@ def find_best_params_cv(df_hist, feature_cols):
     )
 
     print(f"\n[tune] Running {N_OPTUNA_TRIALS} Optuna trials "
-          f"with {len(CV_FOLDS)}-fold time-series CV ...")
+          f"with {len(CV_FOLDS)}-fold time-series CV (MAE loss, MAPE metric) ...")
     t0 = time.time()
     study.optimize(objective, n_trials=N_OPTUNA_TRIALS)
     elapsed = time.time() - t0
 
     print(f"[tune] Done in {elapsed:.1f}s")
-    print(f"[tune] Best CV MAE: R {study.best_value:,.0f}")
+    print(f"[tune] Best CV MAPE: {study.best_value:.1f}%")
     print(f"[tune] Best params:")
     for k, v in study.best_params.items():
         print(f"    {k}: {v}")
@@ -146,10 +182,9 @@ def find_best_params_cv(df_hist, feature_cols):
 
 # ── 3. FINAL MODEL TRAINING ───────────────────────────────────────────────
 
-def train_final_model(X_train, y_train, X_val, y_val, best_params):
-    """Train the final model with best hyperparameters on raw ZAR revenue."""
+def train_final_model(X_train, y_train, X_val, y_val, best_params, w_train=None):
     model = xgb.XGBRegressor(
-        objective='reg:squarederror',
+        objective='reg:absoluteerror',
         tree_method='hist',
         n_estimators=2000,
         early_stopping_rounds=50,
@@ -157,74 +192,85 @@ def train_final_model(X_train, y_train, X_val, y_val, best_params):
         random_state=SEED,
         **best_params,
     )
-    model.fit(X_train, y_train,
+    model.fit(X_train, y_train, sample_weight=w_train,
               eval_set=[(X_val, y_val)], verbose=False)
 
     print(f"\n[model] Best iteration: {model.best_iteration}")
-    print(f"[model] Best val score (RMSE): {model.best_score:,.0f}")
+    print(f"[model] Best val score: {model.best_score:,.0f}")
     return model
 
 
 # ── 4. EVALUATION ─────────────────────────────────────────────────────────
 
-def evaluate(model, X_val, y_val_raw, df_val, feature_cols):
-    """Compute metrics on ZAR scale."""
+def evaluate(model, X_val, df_val, feature_cols):
     preds = np.clip(model.predict(X_val), 0, None)
 
+    y_val_raw = df_val[TARGET].values
     mae = mean_absolute_error(y_val_raw, preds)
     rmse = np.sqrt(mean_squared_error(y_val_raw, preds))
 
-    # MAPE on non-zero days only
+    # Overall MAPE (with floor filter)
+    mape = compute_mape(y_val_raw, preds,
+                        df_val['restaurant_id'].values,
+                        df_val['restaurant_median_revenue'].values)
+
+    # Also compute raw MAPE for comparison
     nonzero = y_val_raw > 0
-    mape = np.mean(np.abs((y_val_raw[nonzero] - preds[nonzero]) / y_val_raw[nonzero])) * 100
+    raw_mape = np.mean(np.abs((y_val_raw[nonzero] - preds[nonzero])
+                              / y_val_raw[nonzero])) * 100
 
     print(f"\n{'='*60}")
-    print(f"  Validation Metrics (June 2025)")
-    print(f"  MAE:   R {mae:,.0f}")
-    print(f"  RMSE:  R {rmse:,.0f}")
-    print(f"  MAPE:  {mape:.1f}% (non-zero days)")
+    print(f"  Validation Metrics (July 2024)")
+    print(f"  MAE:        R {mae:,.0f}")
+    print(f"  RMSE:       R {rmse:,.0f}")
+    print(f"  MAPE:       {mape:.1f}% (excl. near-zero days)")
+    print(f"  Raw MAPE:   {raw_mape:.1f}% (all non-zero days)")
     print(f"{'='*60}")
 
     # Per-restaurant
-    val_results = df_val[['restaurant_id', 'revenue']].copy()
+    val_results = df_val[['restaurant_id', 'revenue', 'restaurant_median_revenue']].copy()
     val_results['predicted'] = preds
-    per_rest = val_results.groupby('restaurant_id').apply(
-        lambda g: pd.Series({
-            'mae': mean_absolute_error(g['revenue'], g['predicted']),
-            'median_rev': g['revenue'].median(),
-        })
-    )
-    per_rest['mae_pct'] = np.where(
-        per_rest['median_rev'] > 0,
-        per_rest['mae'] / per_rest['median_rev'] * 100,
-        np.nan,
-    )
 
-    print("\n  Per-restaurant MAE:")
-    for rid, row in per_rest.iterrows():
-        if np.isnan(row['mae_pct']):
-            print(f"    R{rid:>2d}:  MAE R {row['mae']:>8,.0f}  "
-                  f"(median=0, pct N/A)")
+    print("\n  Per-restaurant MAPE:")
+    for rid in sorted(val_results['restaurant_id'].unique()):
+        g = val_results[val_results['restaurant_id'] == rid]
+        med = g['restaurant_median_revenue'].iloc[0]
+        floor = med * MAPE_FLOOR_PCT
+
+        # MAE
+        r_mae = mean_absolute_error(g['revenue'], g['predicted'])
+
+        # Filtered MAPE
+        valid = g['revenue'] >= floor
+        if valid.sum() > 0:
+            r_mape = np.mean(np.abs((g.loc[valid, 'revenue'].values -
+                                     g.loc[valid, 'predicted'].values)
+                                    / g.loc[valid, 'revenue'].values)) * 100
         else:
-            flag = " WARNING" if row['mae_pct'] > 30 else ""
-            print(f"    R{rid:>2d}:  MAE R {row['mae']:>8,.0f}  "
-                  f"({row['mae_pct']:>5.1f}% of median){flag}")
+            r_mape = float('nan')
 
-    # Feature importance (top 15 by gain)
+        n_filtered = (~valid).sum()
+        flag = " WARNING" if r_mape > 25 else ""
+        filt = f" ({n_filtered} days filtered)" if n_filtered > 0 else ""
+        if np.isnan(r_mape):
+            print(f"    R{rid:>2d}: MAE R{r_mae:>8,.0f}  MAPE N/A{filt}")
+        else:
+            print(f"    R{rid:>2d}: MAE R{r_mae:>8,.0f}  MAPE {r_mape:>5.1f}%{flag}{filt}")
+
+    # Feature importance
     importance = model.get_booster().get_score(importance_type='gain')
     sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)
     print(f"\n  Top 15 features (by gain):")
     for fname, gain in sorted_imp[:15]:
         print(f"    {fname:<40s} {gain:>12,.0f}")
 
-    metrics = {'mae': mae, 'rmse': rmse, 'mape_nonzero': mape}
+    metrics = {'mae': mae, 'rmse': rmse, 'mape_filtered': mape, 'mape_raw': raw_mape}
     return metrics
 
 
 # ── 5. GENERATE FORECAST ──────────────────────────────────────────────────
 
 def generate_forecast(model, df_forecast, feature_cols):
-    """Predict July 2025 and validate output."""
     X = df_forecast[feature_cols]
     preds = np.clip(model.predict(X), 0, None)
     preds = np.round(preds, 2)
@@ -235,7 +281,6 @@ def generate_forecast(model, df_forecast, feature_cols):
         'predicted_revenue': preds,
     })
 
-    # ── Validation ──
     assert len(out) == 682, f"Expected 682 rows, got {len(out)}"
     assert set(out['restaurant_id']) == set(range(1, 23)), "Missing restaurant_ids"
     assert out['date'].nunique() == 31, "Expected 31 unique dates"
@@ -246,7 +291,6 @@ def generate_forecast(model, df_forecast, feature_cols):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out.to_csv(FORECAST_CSV, index=False)
 
-    # Summary
     total = out['predicted_revenue'].sum()
     daily_avg = out['predicted_revenue'].mean()
     print(f"\n[forecast] Saved {FORECAST_CSV}")
@@ -261,7 +305,6 @@ def generate_forecast(model, df_forecast, feature_cols):
 # ── 6. SAVE ARTIFACTS ─────────────────────────────────────────────────────
 
 def save_artifacts(model, metrics, best_params, feature_cols, best_iter):
-    """Save model and metadata."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     model.save_model(str(MODEL_PATH))
 
@@ -272,9 +315,10 @@ def save_artifacts(model, metrics, best_params, feature_cols, best_iter):
         'validation_metrics': metrics,
         'best_iteration': best_iter,
         'train_start': str(TRAIN_START.date()),
-        'validation_cutoff': str(VALIDATION_CUTOFF.date()),
+        'validation_period': f'{VALIDATION_START.date()} to {VALIDATION_END.date()}',
         'target_transform': 'none (raw ZAR)',
-        'hp_search': f'optuna_tpe_{N_OPTUNA_TRIALS}_trials',
+        'objective': 'reg:absoluteerror',
+        'hp_search': f'optuna_tpe_{N_OPTUNA_TRIALS}_trials_mape_objective',
         'cv_folds': len(CV_FOLDS),
     }
     METADATA_PATH.write_text(json.dumps(metadata, indent=2))
@@ -287,31 +331,29 @@ def save_artifacts(model, metrics, best_params, feature_cols, best_iter):
 
 def main():
     print("=" * 60)
-    print("  XGBoost Revenue Forecast — July 2025 (v3)")
-    print("  Raw ZAR target | Optuna | 3-fold TS-CV")
+    print("  XGBoost Revenue Forecast -- July 2025 (v6)")
+    print("  MAE loss | Inverse-median weights | July-aligned CV")
     print("=" * 60)
 
     df_hist, df_forecast, feature_cols = load_and_prepare()
 
-    # ── HP search with time-series CV ──
     best_params = find_best_params_cv(df_hist, feature_cols)
 
-    # ── Train on Jan 2024 – May 2025, validate on June 2025 for metrics ──
-    df_train = df_hist[df_hist['date'] < VALIDATION_CUTOFF]
-    df_val = df_hist[df_hist['date'] >= VALIDATION_CUTOFF]
+    # Eval model: exclude July 2024 from training
+    val_mask = (df_hist['date'] >= VALIDATION_START) & (df_hist['date'] <= VALIDATION_END)
+    df_val = df_hist[val_mask]
+    df_train = df_hist[~val_mask]
 
     X_train = df_train[feature_cols]
     y_train = df_train[TARGET].values
+    w_train = compute_sample_weights(df_train)
     X_val = df_val[feature_cols]
     y_val = df_val[TARGET].values
 
-    eval_model = train_final_model(X_train, y_train, X_val, y_val, best_params)
-    metrics = evaluate(eval_model, X_val, y_val, df_val, feature_cols)
-    best_iter = eval_model.best_iteration
+    eval_model = train_final_model(X_train, y_train, X_val, y_val, best_params, w_train)
+    metrics = evaluate(eval_model, X_val, df_val, feature_cols)
 
-    # ── Retrain on ALL historical data for July forecast ──
-    # Use last 2 weeks of June as early-stopping holdout to find the right
-    # tree count for the larger dataset, instead of hardcoding best_iter.
+    # Retrain on all data for forecast
     retrain_split = pd.Timestamp('2025-06-15')
     df_retrain_train = df_hist[df_hist['date'] < retrain_split]
     df_retrain_val = df_hist[df_hist['date'] >= retrain_split]
@@ -322,7 +364,7 @@ def main():
     print(f"  ES holdout:    {len(df_retrain_val):,} rows (June 15-30)")
 
     final_model = xgb.XGBRegressor(
-        objective='reg:squarederror',
+        objective='reg:absoluteerror',
         tree_method='hist',
         n_estimators=2000,
         early_stopping_rounds=50,
@@ -330,8 +372,10 @@ def main():
         random_state=SEED,
         **best_params,
     )
+    w_retrain = compute_sample_weights(df_retrain_train)
     final_model.fit(
         df_retrain_train[feature_cols], df_retrain_train[TARGET].values,
+        sample_weight=w_retrain,
         eval_set=[(df_retrain_val[feature_cols], df_retrain_val[TARGET].values)],
         verbose=False,
     )

@@ -1,0 +1,85 @@
+============================================================
+  XGBoost Revenue Forecast — July 2025 (v3)
+  Raw ZAR target | Optuna | 3-fold TS-CV
+============================================================
+[data] Historical: 12,034 rows  (2024-01-01 to 2025-06-30)
+[data] Forecast:   682 rows
+[data] Features:   64
+
+[tune] Running 60 Optuna trials with 3-fold time-series CV ...
+[tune] Done in 620.0s
+[tune] Best CV MAE: R 8,509
+[tune] Best params:
+    max_depth: 8
+    learning_rate: 0.010723364696534596
+    min_child_weight: 15
+    subsample: 0.603949540880828
+    colsample_bytree: 0.7571114615865944
+    reg_alpha: 0.0721262202300865
+    reg_lambda: 9.941450502972573
+    gamma: 0.7093773974157525
+
+[model] Best iteration: 956
+[model] Best val score (RMSE): 10,038
+
+============================================================
+  Validation Metrics (June 2025)
+  MAE:   R 7,075
+  RMSE:  R 10,038
+  MAPE:  27.1% (non-zero days)
+============================================================
+
+  Per-restaurant MAE:
+    R 1:  MAE R    8,382  ( 16.6% of median)
+    R 2:  MAE R    8,540  ( 17.6% of median)
+    R 3:  MAE R    8,430  ( 14.8% of median)
+    R 4:  MAE R    6,288  ( 13.4% of median)
+    R 5:  MAE R    4,933  ( 16.9% of median)
+    R 6:  MAE R    6,175  ( 19.9% of median)
+    R 7:  MAE R    7,251  ( 15.3% of median)
+    R 8:  MAE R   16,263  (median=0, pct N/A)
+    R 9:  MAE R    6,939  ( 16.2% of median)
+    R10:  MAE R    6,901  ( 14.7% of median)
+    R11:  MAE R    1,849  ( 29.4% of median)
+    R12:  MAE R    8,533  ( 18.3% of median)
+    R13:  MAE R    8,719  ( 21.0% of median)
+    R14:  MAE R    6,998  ( 14.0% of median)
+    R15:  MAE R    6,123  ( 41.0% of median) WARNING
+    R16:  MAE R    7,141  ( 29.2% of median)
+    R17:  MAE R    2,893  ( 21.9% of median)
+    R18:  MAE R    7,701  ( 18.7% of median)
+    R19:  MAE R    8,691  ( 43.0% of median) WARNING
+    R20:  MAE R    5,544  ( 28.0% of median)
+    R21:  MAE R    1,799  ( 24.6% of median)
+    R22:  MAE R    9,548  ( 21.2% of median)
+
+  Top 15 features (by gain):
+    lag_7                                    29,646,039,040
+    lag_14                                   9,933,045,760
+    rolling_7_mean                           7,956,589,568
+    is_public_holiday                        6,638,729,728
+    lag_28                                   6,350,435,328
+    lag_364                                  5,160,228,864
+    day_of_week                              4,618,941,440
+    rolling_14_mean                          4,371,739,136
+    rest_22                                  2,649,927,168
+    rolling_7_bill_count_mean                2,157,460,480
+    is_weekend                               2,146,340,224
+    lag_21                                   2,047,965,824
+    is_school_holiday                        1,953,249,408
+    is_payday_25                             1,568,093,056
+    is_holiday_adjacent                      1,550,225,664
+
+[retrain] Retraining on all historical data (12,034 rows) with early stopping ...
+  Train portion: 11,682 rows (up to 2025-06-15)
+  ES holdout:    352 rows (June 15-30)
+  Final best iteration: 626
+
+[forecast] Saved C:\Users\User\Dev\stratech\task_1\forecast\output\july_forecast.csv
+  Total July revenue:  R 26,455,302
+  Daily avg (all):     R 38,791
+  Rows: 682  |  Restaurants: 22  |  Days: 31
+[save] Model  -> C:\Users\User\Dev\stratech\task_1\forecast\output\xgboost_model.json
+[save] Meta   -> C:\Users\User\Dev\stratech\task_1\forecast\output\model_metadata.json
+
+Done.

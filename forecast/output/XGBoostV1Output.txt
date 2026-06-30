@@ -1,0 +1,74 @@
+============================================================
+  XGBoost Revenue Forecast — July 2025
+============================================================
+[data] Train: 11,374 rows  (2024-01-01 to 2025-05-31)
+[data] Val:   660 rows  (2025-06-01 to 2025-06-30)
+[data] Forecast: 682 rows
+[data] Features: 38
+
+[tune] Searching 36 hyperparameter combinations ...
+[tune] Done in 50.1s
+[tune] Top 3:
+  #1  MAE=6,847  depth=4 lr=0.03 mcw=10 alpha=0 iters=575
+  #2  MAE=6,847  depth=4 lr=0.03 mcw=10 alpha=0.1 iters=575
+  #3  MAE=6,861  depth=4 lr=0.05 mcw=10 alpha=0 iters=291
+
+[model] Best iteration: 575
+[model] Best val score: 9680
+
+============================================================
+  Validation Metrics (June 2025)
+  MAE:   R 6,847
+  RMSE:  R 9,680
+  MAPE:  25.4% (non-zero days)
+============================================================
+
+  Per-restaurant MAE:
+    R 1:  MAE R    8,311  ( 16.5% of median)
+    R 2:  MAE R    8,969  ( 18.5% of median)
+    R 3:  MAE R    7,137  ( 12.6% of median)
+    R 4:  MAE R    5,573  ( 11.9% of median)
+    R 5:  MAE R    5,208  ( 17.8% of median)
+    R 6:  MAE R    6,080  ( 19.6% of median)
+    R 7:  MAE R    6,992  ( 14.8% of median)
+    R 8:  MAE R   15,711  (median=0, pct N/A)
+    R 9:  MAE R    6,821  ( 16.0% of median)
+    R10:  MAE R    6,798  ( 14.5% of median)
+    R11:  MAE R    2,336  ( 37.2% of median) WARNING
+    R12:  MAE R    7,870  ( 16.9% of median)
+    R13:  MAE R    8,658  ( 20.8% of median)
+    R14:  MAE R    6,997  ( 14.0% of median)
+    R15:  MAE R    4,749  ( 31.8% of median) WARNING
+    R16:  MAE R    6,812  ( 27.9% of median)
+    R17:  MAE R    3,313  ( 25.1% of median)
+    R18:  MAE R    8,096  ( 19.6% of median)
+    R19:  MAE R    7,223  ( 35.7% of median) WARNING
+    R20:  MAE R    5,210  ( 26.3% of median)
+    R21:  MAE R    2,411  ( 33.0% of median) WARNING
+    R22:  MAE R    9,364  ( 20.8% of median)
+
+  Top 15 features (by gain):
+    is_weekend                               57,938,255,872
+    lag_364                                  57,598,578,688
+    rolling_7_mean                           41,201,299,456
+    day_of_week                              19,701,458,944
+    rolling_14_mean                          18,748,995,584
+    rolling_7_bill_count_mean                12,776,095,744
+    is_public_holiday                        11,521,250,304
+    rolling_7_unique_customers_mean          9,017,630,720
+    rolling_28_std                           8,175,138,816
+    is_school_holiday                        5,970,565,120
+    rolling_90_mean                          4,821,593,088
+    rolling_28_bill_count_mean               3,371,054,592
+    day_of_month                             3,203,911,936
+    restaurant_median_revenue                3,191,631,360
+    week_of_year                             3,168,404,480
+
+[forecast] Saved C:\Users\User\Dev\stratech\task_1\forecast\output\july_forecast.csv
+  Total July revenue:  R 25,919,088
+  Daily avg (all):     R 38,005
+  Rows: 682  |  Restaurants: 22  |  Days: 31
+[save] Model  -> C:\Users\User\Dev\stratech\task_1\forecast\output\xgboost_model.json
+[save] Meta   -> C:\Users\User\Dev\stratech\task_1\forecast\output\model_metadata.json
+
+Done.

@@ -8,6 +8,8 @@ supplementary CSVs, and outputs a single feature matrix for XGBoost.
 Output: data/features.csv
 """
 
+import math
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -140,10 +142,80 @@ def add_holiday_features(df):
 
     df['is_school_holiday'] = df.apply(_is_school_holiday, axis=1)
 
-    # Drop helper columns (province stays — needed for one-hot later)
+    # Keep cluster for holiday depth; drop later
+    print(f"[3] Holiday features added ({df.shape[1]} cols)")
+    return df
+
+
+# ── 3b. SCHOOL HOLIDAY DEPTH FEATURES ───────────────────────────────────
+
+def _build_holiday_periods(holiday_csv):
+    """Build a list of (start, end, cluster) for school holiday periods."""
+    hol = pd.read_csv(holiday_csv, parse_dates=['start_date', 'end_date'])
+    school = hol[hol['type'].isin(['school_holiday', 'special_school_holiday'])]
+    periods = []
+    for _, r in school.iterrows():
+        periods.append((r['start_date'], r['end_date'], r['cluster']))
+    return periods
+
+
+def add_holiday_depth_features(df):
+    """Add depth features for school holiday periods (vectorized)."""
+    periods = _build_holiday_periods(HOLIDAY_CSV)
+
+    df['days_into_school_holiday'] = 0
+    df['days_until_holiday_end'] = 0
+    df['holiday_week_number'] = 0
+
+    # Vectorized: loop over periods (small list), mask rows
+    for start, end, cluster in periods:
+        if cluster == 'all':
+            mask = (df['date'] >= start) & (df['date'] <= end)
+        else:
+            mask = (df['date'] >= start) & (df['date'] <= end) & (df['cluster'] == cluster)
+        # Only update rows not already assigned (first matching period wins)
+        unset = df['days_into_school_holiday'] == 0
+        active = mask & unset
+        if active.any():
+            days_in = (df.loc[active, 'date'] - start).dt.days + 1
+            df.loc[active, 'days_into_school_holiday'] = days_in
+            df.loc[active, 'days_until_holiday_end'] = (end - df.loc[active, 'date']).dt.days
+            df.loc[active, 'holiday_week_number'] = np.ceil(days_in / 7).astype(int)
+
+    # Back-to-school week: first 5 weekdays after each holiday period ends
+    back_to_school_dates = set()
+    for start, end, cluster in periods:
+        d = end + pd.Timedelta(days=1)
+        count = 0
+        while count < 5:
+            if d.weekday() < 5:  # Mon-Fri
+                back_to_school_dates.add((d, cluster))
+                count += 1
+            d += pd.Timedelta(days=1)
+
+    # Vectorized back-to-school check
+    bts_all = {d for d, c in back_to_school_dates if c == 'all'}
+    bts_cluster = {}
+    for d, c in back_to_school_dates:
+        if c != 'all':
+            bts_cluster.setdefault(c, set()).add(d)
+
+    df['is_back_to_school_week'] = df['date'].isin(bts_all).astype(int)
+    for clust, dates in bts_cluster.items():
+        mask = (df['cluster'] == clust) & df['date'].isin(dates)
+        df.loc[mask, 'is_back_to_school_week'] = 1
+
+    # Interaction features
+    df['school_holiday_x_weekend'] = df['is_school_holiday'] * df['is_weekend']
+    df['school_holiday_x_dow'] = df['is_school_holiday'] * df['day_of_week']
+
+    # Winter indicator
+    df['is_winter'] = df['month'].isin([6, 7, 8]).astype(int)
+
+    # Drop cluster helper column now
     df.drop(columns=['cluster'], inplace=True)
 
-    print(f"[3] Holiday features added ({df.shape[1]} cols)")
+    print(f"[3b] Holiday depth features added ({df.shape[1]} cols)")
     return df
 
 
@@ -184,11 +256,21 @@ def add_rolling_features(df):
 # ── 5b. FILL SHORT-LAG NaNs ON FORECAST ROWS ────────────────────────────
 
 def fill_forecast_lags(df):
-    """Fill short-lag NaNs on forecast rows with rolling mean proxies."""
+    """Fill short-lag NaNs on forecast rows with cascade: prefer actual lags over rolling proxies."""
     mask = df['is_forecast']
-    for lag, roll_col in LAG_TO_ROLLING.items():
+    # Cascade: for each short lag, try longer lags first, then rolling mean
+    lag_cascade = {
+        7:  ['lag_14', 'lag_21', 'lag_28', 'rolling_7_mean'],
+        14: ['lag_21', 'lag_28', 'rolling_14_mean'],
+        21: ['lag_28', 'rolling_28_mean'],
+        28: ['rolling_28_mean'],
+    }
+    for lag, fallbacks in lag_cascade.items():
         col = f'lag_{lag}'
-        df.loc[mask & df[col].isna(), col] = df.loc[mask & df[col].isna(), roll_col]
+        for fb in fallbacks:
+            still_nan = mask & df[col].isna()
+            if still_nan.any() and fb in df.columns:
+                df.loc[still_nan, col] = df.loc[still_nan, fb]
     n_still_nan = df.loc[mask, [f'lag_{l}' for l in SHORT_LAGS]].isna().sum().sum()
     print(f"[5b] Forecast short-lag NaNs filled (remaining NaN: {n_still_nan})")
     return df
@@ -258,26 +340,18 @@ def add_transaction_and_voucher_features(df):
     return df
 
 
-# ── 8. PROVINCE ENCODING ──────────────────────────────────────────────────
+# ── 8. ORDINAL ENCODING (province + restaurant) ─────────────────────────
 
-def add_province_encoding(df):
-    """One-hot encode province. Drop brand (always SPUR, zero information)."""
-    dummies = pd.get_dummies(df['province'], prefix='prov', dtype=int)
-    df = pd.concat([df, dummies], axis=1)
+PROVINCE_LABELS = {
+    'Free State': 0, 'Gauteng': 1, 'KwaZulu-Natal': 2,
+    'Limpopo': 3, 'Mpumalanga': 4, 'North West': 5, 'Western Cape': 6,
+}
+
+def add_ordinal_encoding(df):
+    """Label-encode province as integer; restaurant_id is already integer."""
+    df['province_code'] = df['province'].map(PROVINCE_LABELS)
     df.drop(columns=['province'], inplace=True)
-
-    print(f"[8] Province one-hot added ({df.shape[1]} cols)")
-    return df
-
-
-# ── 8b. RESTAURANT IDENTITY ENCODING ────────────────────────────────────
-
-def add_restaurant_encoding(df):
-    """One-hot encode restaurant_id to let the model learn per-restaurant patterns."""
-    dummies = pd.get_dummies(df['restaurant_id'], prefix='rest', dtype=int)
-    df = pd.concat([df, dummies], axis=1)
-
-    print(f"[8b] Restaurant one-hot added ({df.shape[1]} cols)")
+    print(f"[8] Ordinal encoding added ({df.shape[1]} cols)")
     return df
 
 
@@ -296,20 +370,36 @@ def add_restaurant_scale(df):
     return df
 
 
+# ── 10. YEAR-OVER-YEAR GROWTH RATE ──────────────────────────────────────
+
+def add_yoy_growth(df):
+    """Trailing 28-day revenue ratio vs same window one year ago."""
+    def _yoy(s):
+        recent = s.shift(1).rolling(28, min_periods=14).mean()
+        year_ago = s.shift(365).rolling(28, min_periods=14).mean()
+        ratio = recent / year_ago.replace(0, np.nan)
+        return ratio.ffill().fillna(1.0)
+
+    df['yoy_growth_rate'] = df.groupby('restaurant_id')['revenue'].transform(_yoy)
+    print(f"[10] YoY growth rate added ({df.shape[1]} cols)")
+    return df
+
+
 # ── MAIN ───────────────────────────────────────────────────────────────────
 
 def main():
     df = load_base_data()
     df = add_calendar_features(df)
     df = add_holiday_features(df)
+    df = add_holiday_depth_features(df)
     df = add_lag_features(df)
     df = add_rolling_features(df)
     df = fill_forecast_lags(df)
     df = add_same_week_last_year(df)
     df = add_transaction_and_voucher_features(df)
-    df = add_province_encoding(df)
-    df = add_restaurant_encoding(df)
+    df = add_ordinal_encoding(df)
     df = add_restaurant_scale(df)
+    df = add_yoy_growth(df)
 
     # Final sort and save
     df = df.sort_values(['restaurant_id', 'date']).reset_index(drop=True)

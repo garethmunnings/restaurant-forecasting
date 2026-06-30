@@ -308,7 +308,10 @@ export default function SalesChart({
 
       <div className="chart-legend">
         <div className="chart-legend-item">
-          <span className="chart-legend-line actual" />
+          <span
+            className="chart-legend-swatch"
+            style={{ background: "var(--accent)" }}
+          />
           Actual
         </div>
         {showForecast && (

@@ -21,10 +21,10 @@ export function formatCompactCurrency(value) {
   if (value == null || isNaN(value)) return "R 0";
   const abs = Math.abs(value);
   if (abs >= 1_000_000) {
-    return `R ${(value / 1_000_000).toFixed(1)}m`;
+    return `R${(value / 1_000_000).toFixed(1)}m`;
   }
   if (abs >= 1_000) {
-    return `R ${(value / 1_000).toFixed(0)}k`;
+    return `R${(value / 1_000).toFixed(0)}k`;
   }
   return formatCurrency(value);
 }
@@ -121,41 +121,40 @@ function getMonday(dateStr) {
   return `${y}-${m}-${dd}`;
 }
 
+function weeklyReps(points) {
+  const weeks = new Map();
+  for (const p of points) {
+    const key = getMonday(p.date);
+    if (!weeks.has(key)) weeks.set(key, []);
+    weeks.get(key).push(p);
+  }
+  const reps = [];
+  for (const [, pts] of weeks) {
+    // Pick the middle day of the week as the representative sample
+    reps.push(pts[Math.floor(pts.length / 2)]);
+  }
+  return reps;
+}
+
 function sampleWeekly(dailyData) {
   if (dailyData.length === 0) return [];
 
-  const weeks = new Map();
-  const bridges = [];
-  for (const point of dailyData) {
-    if (point.isBridge) {
-      bridges.push(point);
-      continue;
-    }
-    const weekKey = getMonday(point.date);
-    if (!weeks.has(weekKey)) {
-      weeks.set(weekKey, []);
-    }
-    weeks.get(weekKey).push(point);
+  // Bucket actuals and forecasts independently so the boundary week (which
+  // straddles 30 Jun → 1 Jul) never mixes types and drops the last actual.
+  const actualReps = weeklyReps(dailyData.filter((p) => p.type === "actual"));
+  const forecastReps = weeklyReps(dailyData.filter((p) => p.type === "forecast"));
+
+  // Connect the two lines: give the last actual representative a forecast value
+  // equal to its own actual, so the forecast line's first vertex coincides exactly
+  // with the actual line's last vertex (no gap on the category axis). isBridge keeps
+  // the tooltip from showing a duplicate "Forecast" row on that boundary point.
+  if (actualReps.length > 0 && forecastReps.length > 0) {
+    const lastActual = actualReps[actualReps.length - 1];
+    lastActual.forecast = lastActual.actual;
+    lastActual.isBridge = true;
   }
 
-  const result = [];
-  for (const [, points] of weeks) {
-    // Pick the middle day of the week as the representative sample
-    const mid = Math.floor(points.length / 2);
-    result.push(points[mid]);
-  }
-
-  // Re-insert bridge points so the forecast line connects to actuals
-  for (const bridge of bridges) {
-    const insertIdx = result.findIndex((p) => p.date > bridge.date);
-    if (insertIdx === -1) {
-      result.push(bridge);
-    } else {
-      result.splice(insertIdx, 0, bridge);
-    }
-  }
-
-  return result;
+  return [...actualReps, ...forecastReps];
 }
 
 // ─── Chart Data ────────────────────────────────────────────
@@ -244,29 +243,8 @@ export function buildChartData(
     const baselineTotal = dailyBaseline * forecastData.length;
     const forecastColor = forecastTotal >= baselineTotal ? "var(--good)" : "var(--bad)";
 
-    // Bridge: add last actual as first forecast point so the forecast LINE
-    // connects to actuals. Only line-chart ranges (1y/all) draw that line —
-    // bar-chart ranges (1m/6m) don't, and the bridge there would duplicate the
-    // last actual's `date`, breaking ReferenceArea overlays on the band axis.
-    const isLineChart = dateRange === "1y" || dateRange === "all";
-    if (isLineChart && result.length > 0 && forecastData.length > 0) {
-      const lastActual = result[result.length - 1];
-      result.push(
-        annotateHolidays(
-          {
-            date: lastActual.date,
-            dateLabel: lastActual.dateLabel,
-            actual: null,
-            forecast: lastActual.actual,
-            value: lastActual.actual,
-            type: "bridge",
-            trendColor: "var(--accent)",
-            isBridge: true,
-          },
-          holidays
-        )
-      );
-    }
+    // The forecast line is connected to the actuals inside sampleWeekly (1y/all),
+    // which anchors the forecast's first vertex onto the last actual representative.
 
     for (const entry of forecastData) {
       const rev = Math.round(entry.predictedRevenue);
