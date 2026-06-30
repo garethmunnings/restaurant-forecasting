@@ -7,13 +7,12 @@
  * {
  *   restaurants: [{ id, brand, province }],
  *   dailySales: {
- *     "restaurantId": [{ date, totalSales, transactionCount, avgSale, participantCount }]
+ *     "restaurantId": [{ date, totalSales }]
  *   }
  * }
  */
 
-import { createReadStream, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { createInterface } from "readline";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -42,73 +41,37 @@ const restaurants = restaurantLines.slice(1).map((line) => {
 
 console.log(`Loaded ${restaurants.length} restaurants`);
 
-// Aggregate sales by restaurant + date (daily)
-// sale_id,restaurant_id,sale_at,amount,participant_count,loyalty_account_count,voucher_redeemer_count,had_voucher
-const dailySales = {}; // { restaurantId: { date: { totalSales, count, participants } } }
+// Read pre-aggregated daily revenue (already zero-filled by forecast/aggregate.py)
+// Header: restaurant_id,date,revenue,brand,province,day_of_week
+const aggCsv = readFileSync(
+  join(DATA_DIR, "aggregated_daily_revenue.csv"),
+  "utf-8"
+);
+const aggLines = aggCsv.trim().split(/\r?\n/);
 
-const rl = createInterface({
-  input: createReadStream(
-    join(DATA_DIR, "spur_reporting.student_program.sale.csv")
-  ),
-  crlfDelay: Infinity,
-});
-
-let lineCount = 0;
-let isHeader = true;
-
-for await (const line of rl) {
-  if (isHeader) {
-    isHeader = false;
-    continue;
-  }
-  lineCount++;
-
-  // Parse CSV line (no quoted fields in this data)
-  const parts = line.split(",");
-  const restaurantId = parts[1];
-  const saleAt = parts[2]; // "2023-01-01 05:45:05.567608 +00:00"
-  const amount = parseFloat(parts[3]);
-  const participantCount = parseInt(parts[4]);
-
-  // Extract date (YYYY-MM-DD)
-  const date = saleAt.substring(0, 10);
-
-  if (!dailySales[restaurantId]) {
-    dailySales[restaurantId] = {};
-  }
-  if (!dailySales[restaurantId][date]) {
-    dailySales[restaurantId][date] = {
-      totalSales: 0,
-      count: 0,
-      participants: 0,
-    };
-  }
-
-  const day = dailySales[restaurantId][date];
-  day.totalSales += amount;
-  day.count += 1;
-  day.participants += participantCount;
-
-  if (lineCount % 250000 === 0) {
-    console.log(`  Processed ${lineCount} rows...`);
-  }
-}
-
-console.log(`Total rows processed: ${lineCount}`);
-
-// Convert to sorted arrays
 const dailySalesArrays = {};
-for (const [restaurantId, dates] of Object.entries(dailySales)) {
-  dailySalesArrays[restaurantId] = Object.entries(dates)
-    .map(([date, data]) => ({
-      date,
-      totalSales: Math.round(data.totalSales * 100) / 100,
-      transactionCount: data.count,
-      avgSale: Math.round((data.totalSales / data.count) * 100) / 100,
-      participantCount: data.participants,
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+for (const line of aggLines.slice(1)) {
+  const parts = line.split(",");
+  const restaurantId = parts[0];
+  const date = parts[1].substring(0, 10); // strip timestamp portion
+  const revenue = parseFloat(parts[2]) || 0;
+
+  if (!dailySalesArrays[restaurantId]) {
+    dailySalesArrays[restaurantId] = [];
+  }
+  dailySalesArrays[restaurantId].push({
+    date,
+    totalSales: Math.round(revenue * 100) / 100,
+  });
 }
+
+// Sort each restaurant's entries by date
+for (const arr of Object.values(dailySalesArrays)) {
+  arr.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+const totalRows = aggLines.length - 1;
+console.log(`Total rows loaded from aggregated CSV: ${totalRows}`);
 
 // Read July 2025 forecast (forecast/output/july_forecast.csv)
 // restaurant_id,date,predicted_revenue
@@ -138,10 +101,40 @@ try {
   console.warn(`Could not load forecast CSV (${FORECAST_CSV}): ${err.message}`);
 }
 
+// Read SA school + public holidays (data/sa_school_holidays.csv)
+// year,cluster,holiday_name,type,start_date,end_date
+// cluster is inland/coastal only in 2023; 2024-2025 use "all". Including
+// cluster in {all, inland} covers every holiday exactly once (no 2023 duplicates).
+const holidays = { school: [], public: [] };
+try {
+  const holidayCsv = readFileSync(
+    join(DATA_DIR, "sa_school_holidays.csv"),
+    "utf-8"
+  );
+  const holidayLines = holidayCsv.trim().split(/\r?\n/);
+  holidayLines.slice(1).forEach((line) => {
+    const [, cluster, name, type, start, end] = line.split(",");
+    if (cluster !== "all" && cluster !== "inland") return;
+    if (type === "school_holiday" || type === "special_school_holiday") {
+      holidays.school.push({ name, start, end });
+    } else if (type === "public_holiday") {
+      holidays.public.push({ date: start, name });
+    }
+  });
+  holidays.school.sort((a, b) => a.start.localeCompare(b.start));
+  holidays.public.sort((a, b) => a.date.localeCompare(b.date));
+  console.log(
+    `Loaded holidays: ${holidays.school.length} school, ${holidays.public.length} public`
+  );
+} catch (err) {
+  console.warn(`Could not load holidays CSV: ${err.message}`);
+}
+
 const output = {
   restaurants,
   dailySales: dailySalesArrays,
   forecast,
+  holidays,
 };
 
 mkdirSync(OUT_DIR, { recursive: true });

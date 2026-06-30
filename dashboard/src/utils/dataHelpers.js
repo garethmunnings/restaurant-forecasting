@@ -45,7 +45,7 @@ function parseDate(dateStr) {
   return new Date(y, m - 1, d);
 }
 
-function formatChartDate(dateStr) {
+export function formatChartDate(dateStr) {
   const d = parseDate(dateStr);
   const months = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -61,6 +61,28 @@ function getDayOfWeek(dateStr) {
 function isWeekend(dateStr) {
   const dow = getDayOfWeek(dateStr);
   return dow === 0 || dow === 6;
+}
+
+// ─── Holiday lookups ───────────────────────────────────────
+// Dates are "YYYY-MM-DD" strings, so lexical comparison is chronological.
+
+function findSchoolHoliday(dateStr, school) {
+  if (!school) return null;
+  const match = school.find((h) => dateStr >= h.start && dateStr <= h.end);
+  return match ? match.name : null;
+}
+
+function findPublicHoliday(dateStr, publicHols) {
+  if (!publicHols) return null;
+  const match = publicHols.find((h) => h.date === dateStr);
+  return match ? match.name : null;
+}
+
+function annotateHolidays(point, holidays) {
+  point.isWeekend = isWeekend(point.date);
+  point.schoolHoliday = findSchoolHoliday(point.date, holidays?.school);
+  point.publicHoliday = findPublicHoliday(point.date, holidays?.public);
+  return point;
 }
 
 function getMonthDates(dailyData, year, month) {
@@ -85,23 +107,54 @@ function aggregateAllRestaurants(dailySales) {
     .sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
-function computeFleetAverage(dailySales) {
-  const byDate = {};
-  const countByDate = {};
-  for (const restId of Object.keys(dailySales)) {
-    for (const entry of dailySales[restId]) {
-      if (!byDate[entry.date]) {
-        byDate[entry.date] = 0;
-        countByDate[entry.date] = 0;
-      }
-      byDate[entry.date] += entry.totalSales;
-      countByDate[entry.date] += 1;
+// ─── Weekly Sampling ──────────────────────────────────────
+
+function getMonday(dateStr) {
+  const d = parseDate(dateStr);
+  const day = d.getDay(); // 0=Sun, 6=Sat
+  const diff = day === 0 ? -6 : 1 - day; // shift to Monday
+  const mon = new Date(d);
+  mon.setDate(mon.getDate() + diff);
+  const y = mon.getFullYear();
+  const m = String(mon.getMonth() + 1).padStart(2, "0");
+  const dd = String(mon.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+function sampleWeekly(dailyData) {
+  if (dailyData.length === 0) return [];
+
+  const weeks = new Map();
+  const bridges = [];
+  for (const point of dailyData) {
+    if (point.isBridge) {
+      bridges.push(point);
+      continue;
+    }
+    const weekKey = getMonday(point.date);
+    if (!weeks.has(weekKey)) {
+      weeks.set(weekKey, []);
+    }
+    weeks.get(weekKey).push(point);
+  }
+
+  const result = [];
+  for (const [, points] of weeks) {
+    // Pick the middle day of the week as the representative sample
+    const mid = Math.floor(points.length / 2);
+    result.push(points[mid]);
+  }
+
+  // Re-insert bridge points so the forecast line connects to actuals
+  for (const bridge of bridges) {
+    const insertIdx = result.findIndex((p) => p.date > bridge.date);
+    if (insertIdx === -1) {
+      result.push(bridge);
+    } else {
+      result.splice(insertIdx, 0, bridge);
     }
   }
-  const result = {};
-  for (const date of Object.keys(byDate)) {
-    result[date] = byDate[date] / countByDate[date];
-  }
+
   return result;
 }
 
@@ -110,17 +163,27 @@ function computeFleetAverage(dailySales) {
 const ACTUAL_CUTOFF = "2025-06-30";
 const FORECAST_START = "2025-07-01";
 
+// Start of the rolling window for a given date-range key, as a "YYYY-MM-DD"
+// string anchored to ACTUAL_CUTOFF. Shared by chart, summary, and ranking.
+function getWindowStartStr(dateRange) {
+  if (dateRange === "all") return "2000-01-01";
+  const daysBack = dateRange === "1m" ? 30 : dateRange === "1y" ? 365 : 180;
+  const windowStart = new Date(parseDate(ACTUAL_CUTOFF));
+  windowStart.setDate(windowStart.getDate() - (daysBack - 1));
+  return windowStart.toISOString().slice(0, 10);
+}
+
 export function buildChartData(
   dailySales,
   forecast,
   selectedRestaurant,
   showForecast,
-  dateRange = "6m"
+  dateRange = "6m",
+  holidays = null
 ) {
   if (!dailySales) return [];
 
   let actuals;
-  let averageMap = null;
 
   if (selectedRestaurant === "all") {
     actuals = aggregateAllRestaurants(dailySales);
@@ -129,36 +192,27 @@ export function buildChartData(
       date: d.date,
       totalSales: d.totalSales,
     }));
-    averageMap = computeFleetAverage(dailySales);
   }
 
   // Filter actuals based on selected date range
-  const cutoffDate = parseDate(ACTUAL_CUTOFF);
-  let windowStartStr;
-  if (dateRange === "all") {
-    windowStartStr = "2000-01-01";
-  } else {
-    const daysBack = dateRange === "1m" ? 30 : dateRange === "1y" ? 365 : 180;
-    const windowStart = new Date(cutoffDate);
-    windowStart.setDate(windowStart.getDate() - (daysBack - 1));
-    windowStartStr = windowStart.toISOString().slice(0, 10);
-  }
+  const windowStartStr = getWindowStartStr(dateRange);
 
   const filtered = actuals.filter(
     (d) => d.date >= windowStartStr && d.date <= ACTUAL_CUTOFF
   );
 
   const result = filtered.map((d) => {
+    const actual = Math.round(d.totalSales);
     const point = {
       date: d.date,
       dateLabel: formatChartDate(d.date),
-      actual: Math.round(d.totalSales),
+      actual,
       forecast: null,
+      value: actual,
+      type: "actual",
+      trendColor: "var(--accent)",
     };
-    if (averageMap && averageMap[d.date] != null) {
-      point.average = Math.round(averageMap[d.date]);
-    }
-    return point;
+    return annotateHolidays(point, holidays);
   });
 
   if (showForecast && forecast) {
@@ -179,31 +233,59 @@ export function buildChartData(
       forecastData = forecast[selectedRestaurant] || [];
     }
 
-    // Bridge: add last actual as first forecast point
-    if (result.length > 0 && forecastData.length > 0) {
+    // Determine overall forecast trend: compare total forecast to
+    // trailing 14-day average projected over the same number of days
+    const trailing14 = filtered.slice(-14);
+    const dailyBaseline =
+      trailing14.length > 0
+        ? trailing14.reduce((s, d) => s + d.totalSales, 0) / trailing14.length
+        : 0;
+    const forecastTotal = forecastData.reduce((s, d) => s + d.predictedRevenue, 0);
+    const baselineTotal = dailyBaseline * forecastData.length;
+    const forecastColor = forecastTotal >= baselineTotal ? "var(--good)" : "var(--bad)";
+
+    // Bridge: add last actual as first forecast point so the forecast LINE
+    // connects to actuals. Only line-chart ranges (1y/all) draw that line —
+    // bar-chart ranges (1m/6m) don't, and the bridge there would duplicate the
+    // last actual's `date`, breaking ReferenceArea overlays on the band axis.
+    const isLineChart = dateRange === "1y" || dateRange === "all";
+    if (isLineChart && result.length > 0 && forecastData.length > 0) {
       const lastActual = result[result.length - 1];
-      result.push({
-        date: lastActual.date,
-        dateLabel: lastActual.dateLabel,
-        actual: null,
-        forecast: lastActual.actual,
-        average: lastActual.average || null,
-        isBridge: true,
-      });
+      result.push(
+        annotateHolidays(
+          {
+            date: lastActual.date,
+            dateLabel: lastActual.dateLabel,
+            actual: null,
+            forecast: lastActual.actual,
+            value: lastActual.actual,
+            type: "bridge",
+            trendColor: "var(--accent)",
+            isBridge: true,
+          },
+          holidays
+        )
+      );
     }
 
     for (const entry of forecastData) {
+      const rev = Math.round(entry.predictedRevenue);
       const point = {
         date: entry.date,
         dateLabel: formatChartDate(entry.date),
         actual: null,
-        forecast: Math.round(entry.predictedRevenue),
+        forecast: rev,
+        value: rev,
+        type: "forecast",
+        trendColor: forecastColor,
       };
-      if (averageMap && averageMap[entry.date] != null) {
-        point.average = Math.round(averageMap[entry.date]);
-      }
-      result.push(point);
+      result.push(annotateHolidays(point, holidays));
     }
+  }
+
+  // Weekly aggregation for 1y and all views
+  if (dateRange === "1y" || dateRange === "all") {
+    return sampleWeekly(result);
   }
 
   return result;
@@ -344,6 +426,84 @@ export function computeKpis(
       last14.length > 0
         ? last14.reduce((s, d) => s + d.totalSales, 0) / last14.length
         : 0,
+  };
+}
+
+// ─── Restaurant Ranking ────────────────────────────────────
+
+const RANGE_LABELS = {
+  "1m": "Last month",
+  "6m": "Last 6 months",
+  "1y": "Last year",
+  all: "All time",
+};
+
+/**
+ * Rank restaurants for the comparison panel.
+ *
+ * Forecast OFF → every restaurant by total revenue over the selected chart
+ *   window (dateRange), highest first.
+ * Forecast ON  → biggest movers by % change of the July forecast total vs
+ *   June 2025 actuals: top 5 gainers and top 5 decliners.
+ *
+ * Returns a render-ready object, or null when data is missing.
+ */
+export function computeRanking(
+  dailySales,
+  forecast,
+  restaurants,
+  showForecast,
+  dateRange = "6m"
+) {
+  if (!dailySales || !restaurants) return null;
+
+  if (showForecast && forecast) {
+    const movers = [];
+    for (const r of restaurants) {
+      const key = String(r.id);
+      const juneData = getMonthData(dailySales, key, 2025, 6);
+      const juneTotal = juneData.reduce((s, d) => s + d.totalSales, 0);
+      if (juneTotal === 0) continue; // % change undefined — skip
+      const julyTotal = (forecast[key] || []).reduce(
+        (s, e) => s + e.predictedRevenue,
+        0
+      );
+      const delta = julyTotal - juneTotal;
+      movers.push({
+        id: r.id,
+        province: r.province,
+        pct: (delta / juneTotal) * 100,
+        delta,
+      });
+    }
+    movers.sort((a, b) => b.pct - a.pct);
+    const gainers = movers.filter((m) => m.pct > 0).slice(0, 5);
+    const decliners = movers
+      .filter((m) => m.pct < 0)
+      .slice(-5)
+      .reverse(); // most-negative first
+    const maxAbsPct = Math.max(
+      1,
+      ...gainers.map((m) => m.pct),
+      ...decliners.map((m) => Math.abs(m.pct))
+    );
+    return { mode: "forecast", gainers, decliners, maxAbsPct };
+  }
+
+  // Revenue mode — total over the selected window, every restaurant
+  const windowStartStr = getWindowStartStr(dateRange);
+  const rows = restaurants.map((r) => {
+    const value = (dailySales[String(r.id)] || [])
+      .filter((d) => d.date >= windowStartStr && d.date <= ACTUAL_CUTOFF)
+      .reduce((s, d) => s + d.totalSales, 0);
+    return { id: r.id, province: r.province, value };
+  });
+  rows.sort((a, b) => b.value - a.value);
+  return {
+    mode: "revenue",
+    rangeLabel: RANGE_LABELS[dateRange] || RANGE_LABELS["6m"],
+    rows,
+    max: rows.length > 0 ? rows[0].value : 0,
   };
 }
 

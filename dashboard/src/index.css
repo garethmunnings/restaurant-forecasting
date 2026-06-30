@@ -11,8 +11,9 @@
   --bg: #f2f2f2;
   --text: #011140;
   --accent: #03178c;
-  --good: #007182;
+  --good: #00825b;
   --bad: #bf212e;
+  --holiday: #c8902f;
   --card-bg: #ffffff;
   --border: #e0e0e0;
   --text-muted: #6b7280;
@@ -40,9 +41,9 @@ body {
 }
 
 .app {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 32px 24px 64px;
+  max-width: 1440px;
+  margin: 0;
+  padding: 32px 32px 64px;
 }
 
 /* Header / Letterhead */
@@ -50,8 +51,8 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 32px;
-  padding-bottom: 20px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
   border-bottom: 2px solid var(--accent);
 }
 
@@ -72,7 +73,7 @@ body {
 }
 
 .header-title {
-  font-size: 1.4rem;
+  font-size: 2.0rem;
   color: var(--text);
   letter-spacing: 0.02em;
   font-weight: 600;
@@ -80,24 +81,24 @@ body {
 
 /* Revenue Total (below chart) */
 .revenue-total {
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 .revenue-total-value {
-  font-size: 2.5rem;
+  font-size: 4.5rem;
   letter-spacing: -0.02em;
-  line-height: 1.1;
+  line-height: 1;
   color: var(--text);
 }
 
 .revenue-total-label {
   font-size: 0.85rem;
   color: var(--text-muted);
-  margin-top: 4px;
+  margin-top: 10px;
 }
 
 .revenue-summary {
-  margin-top: 8px;
+  margin-top: 0px;
   font-size: 1.05rem;
   line-height: 1.5;
 }
@@ -122,7 +123,14 @@ body {
   box-shadow: var(--shadow);
   border: 1px solid var(--border);
   display: flex;
-  gap: 32px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.kpi-group > .kpi-group-row {
+  flex: 1 1 200px;
 }
 
 .kpi-group-row {
@@ -189,7 +197,7 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   flex-wrap: wrap;
 }
 
@@ -258,6 +266,10 @@ body {
   background: var(--accent);
 }
 
+.forecast-switch-holiday input:checked + .forecast-switch-track {
+  background: var(--holiday);
+}
+
 .forecast-switch-knob {
   position: absolute;
   top: 3px;
@@ -308,14 +320,28 @@ body {
   color: var(--accent);
 }
 
+/* Main two-column layout */
+.main-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-end;
+  margin-bottom: 24px;
+}
+
+.main-left {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Chart */
+
 .chart-section {
+  min-width: 0;
   background: var(--card-bg);
   border-radius: var(--radius);
   padding: 24px 20px 16px;
   box-shadow: var(--shadow);
   border: 1px solid var(--border);
-  margin-bottom: 24px;
 }
 
 .chart-header {
@@ -362,6 +388,12 @@ body {
   color: var(--text);
 }
 
+.chart-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .chart-legend {
   display: flex;
   gap: 20px;
@@ -383,6 +415,13 @@ body {
   height: 2px;
 }
 
+.chart-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
 .chart-legend-line.actual {
   background: var(--accent);
 }
@@ -400,16 +439,18 @@ body {
   background-color: transparent;
 }
 
-.chart-legend-line.average {
-  background: var(--text-muted);
-  background-image: repeating-linear-gradient(
-    90deg,
-    var(--text-muted) 0,
-    var(--text-muted) 2px,
-    transparent 2px,
-    transparent 5px
-  );
-  background-color: transparent;
+.chart-legend-swatch.school {
+  background: rgba(200, 144, 47, 0.22);
+  border: 1px solid rgba(200, 144, 47, 0.35);
+}
+
+.chart-legend-swatch.weekend {
+  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.18);
+}
+
+.chart-legend-swatch.public {
+  background: var(--holiday);
 }
 
 /* Custom Tooltip */
@@ -444,6 +485,16 @@ body {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.tooltip-dot-ring {
+  background: transparent;
+  border: 2px solid var(--holiday);
+}
+
+.tooltip-row-note {
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 
 /* Loading & Error */
@@ -536,7 +587,202 @@ body {
   margin-top: 8px;
 }
 
+/* Restaurant Ranking */
+.ranking-section {
+  flex: 0 0 380px;
+  overflow: hidden;
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 24px 20px;
+}
+
+.ranking-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.ranking-heading {
+  font-size: 1.1rem;
+  color: var(--text);
+}
+
+.ranking-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Revenue mode: single column of all restaurants */
+.ranking-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+}
+
+/* Forecast mode: gainers / decliners stacked */
+.ranking-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+}
+
+.ranking-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+}
+
+.ranking-group-heading.good {
+  color: var(--good);
+}
+
+.ranking-group-heading.bad {
+  color: var(--bad);
+}
+
+.ranking-group-glyph {
+  font-size: 0.7rem;
+}
+
+.ranking-empty {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+/* Row */
+.ranking-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  transition: all 0.15s ease;
+}
+
+.ranking-row:hover {
+  background: var(--bg);
+}
+
+.ranking-row.selected {
+  background: var(--bg);
+  border-left-color: var(--accent);
+}
+
+.ranking-rank {
+  flex: 0 0 22px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.ranking-name {
+  flex: 0 0 110px;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.ranking-province {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.ranking-bar-track {
+  flex: 1 1 auto;
+  height: 14px;
+  min-width: 40px;
+  max-width: 360px;
+  background: var(--bg);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.ranking-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.ranking-bar-fill.good {
+  background: var(--good);
+}
+
+.ranking-bar-fill.bad {
+  background: var(--bad);
+}
+
+.ranking-bar-fill.accent {
+  background: var(--accent);
+}
+
+.ranking-value {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 96px;
+}
+
+.ranking-pct {
+  font-size: 0.9rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ranking-pct.good {
+  color: var(--good);
+}
+
+.ranking-pct.bad {
+  color: var(--bad);
+}
+
+.ranking-delta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Responsive */
+@media (max-width: 900px) {
+  .main-layout {
+    flex-direction: column;
+  }
+
+  .kpi-group {
+    flex: 1 1 auto;
+    max-width: 100%;
+  }
+
+  .ranking-section {
+    flex: 1 1 auto;
+  }
+}
+
 @media (max-width: 640px) {
   .app {
     padding: 20px 16px 48px;
@@ -564,7 +810,6 @@ body {
   }
 
   .kpi-group {
-    flex-direction: column;
     gap: 20px;
   }
 
@@ -574,8 +819,27 @@ body {
     gap: 12px;
   }
 
+  .chart-header-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
   .chart-legend {
     flex-wrap: wrap;
     gap: 12px;
+  }
+
+  .ranking-grid,
+  .ranking-columns {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .ranking-name {
+    flex-basis: 96px;
+  }
+
+  .ranking-value {
+    min-width: 84px;
   }
 }
