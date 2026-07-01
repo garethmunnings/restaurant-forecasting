@@ -178,7 +178,7 @@ export default function SalesChart({
           x1={s.x1}
           x2={s.x2}
           fill="var(--holiday)"
-          fillOpacity={0.22}
+          fillOpacity={0.65}
           strokeOpacity={0}
         />
       ))}
@@ -188,7 +188,7 @@ export default function SalesChart({
           x1={s.x1}
           x2={s.x2}
           fill="#000000"
-          fillOpacity={0.12}
+          fillOpacity={0.30}
           strokeOpacity={0}
         />
       ))}

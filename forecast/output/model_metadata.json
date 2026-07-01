@@ -48,24 +48,26 @@
     "yoy_growth_rate"
   ],
   "best_params": {
-    "max_depth": 4,
-    "learning_rate": 0.04696523818462374,
-    "min_child_weight": 4,
-    "subsample": 0.8531404579279772,
-    "colsample_bytree": 0.760275557159172,
-    "reg_alpha": 3.628188987894365,
-    "reg_lambda": 0.34748004640372804,
-    "gamma": 0.16087493274944994
+    "max_depth": 7,
+    "learning_rate": 0.014601980452021443,
+    "min_child_weight": 11,
+    "subsample": 0.760252859013917,
+    "colsample_bytree": 0.679471865575432,
+    "reg_alpha": 0.20879042089673303,
+    "reg_lambda": 0.04010035339533882,
+    "gamma": 0.16015065400262973
   },
   "validation_metrics": {
-    "mae": 7703.956509014769,
-    "rmse": 10791.255193189052,
-    "mape_nonzero": 29.072774239161486
+    "mae": 7636.794874851083,
+    "rmse": 10887.433877672669,
+    "mape_filtered": 29.61633331357451,
+    "mape_raw": 29.61633331357451
   },
-  "best_iteration": 550,
+  "best_iteration": 1157,
   "train_start": "2023-01-01",
   "validation_period": "2024-07-01 to 2024-07-31",
-  "target_transform": "normalised (revenue / restaurant_median)",
+  "target_transform": "none (raw ZAR)",
+  "objective": "reg:absoluteerror",
   "hp_search": "optuna_tpe_100_trials_mape_objective",
   "cv_folds": 3
 }
