@@ -7,7 +7,7 @@ export default function Header() {
   return (
     <header className="header">
       <a href="/" onClick={handleLogoClick} className="header-logo">
-        <img src="/spur-logo.svg" alt="Spur" />
+        <img src={`${import.meta.env.BASE_URL}spur-logo.svg`} alt="Spur" />
       </a>
       <h1 className="header-title">Sales & Forecasting</h1>
     </header>

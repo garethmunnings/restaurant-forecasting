@@ -8,7 +8,7 @@ export default function useSalesData() {
   const load = () => {
     setLoading(true);
     setError(null);
-    fetch("/sales_data.json")
+    fetch(`${import.meta.env.BASE_URL}sales_data.json`)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load data (${res.status})`);
         return res.json();
