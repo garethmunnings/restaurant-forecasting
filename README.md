@@ -1,6 +1,8 @@
-# Spur Restaurant Revenue Forecasting
+# Restaurant Revenue Forecasting
 
-Forecast **July 2025 daily sales** for 22 Spur restaurants and present the results in a manager-facing dashboard.
+🚀 **Live dashboard deployed on GitHub Pages: https://garethmunnings.github.io/restaurant-forecasting/**
+
+Forecast **July 2025 daily sales** for 22 restaurants and present the results in a manager-facing dashboard.
 
 Built for the Stratech Signal Intelligence Student Programme. The scenario assumes **today is 30 June 2025** — July has not happened yet, so the forecast is a true out-of-sample projection.
 
